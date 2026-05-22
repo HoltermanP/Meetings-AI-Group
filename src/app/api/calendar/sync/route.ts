@@ -27,6 +27,7 @@ export async function POST() {
 
   for (const event of events) {
     const scheduledAt = new Date(event.start.dateTime);
+    const scheduledEndAt = new Date(event.end.dateTime);
     const isTeams =
       event.isOnlineMeeting &&
       (event.onlineMeetingProvider ?? "").toLowerCase().includes("teams");
@@ -43,6 +44,7 @@ export async function POST() {
       update: {
         title: event.subject || undefined,
         scheduledAt,
+        scheduledEndAt,
         platform: isTeams ? "teams" : undefined,
         teamsJoinUrl: event.onlineMeeting?.joinUrl ?? null,
       },
@@ -52,6 +54,7 @@ export async function POST() {
         status: "scheduled",
         platform: isTeams ? "teams" : "other",
         scheduledAt,
+        scheduledEndAt,
         outlookEventId: event.id,
         teamsJoinUrl: event.onlineMeeting?.joinUrl ?? null,
         participants: { create: participants },

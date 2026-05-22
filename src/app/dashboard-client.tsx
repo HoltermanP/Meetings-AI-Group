@@ -2,11 +2,12 @@
 
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import { Plus, CalendarPlus, Calendar, Play, Briefcase, Mic } from "lucide-react";
+import { Plus, CalendarPlus, Calendar, Play, Briefcase, Mic, ArrowRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import MeetingCard from "@/components/meeting/MeetingCard";
 import NewMeetingDialog from "@/components/meeting/NewMeetingDialog";
 import PlanFromDashboardDialog from "@/components/meeting/PlanFromDashboardDialog";
+import { useQuickRecord } from "@/lib/use-quick-record";
 
 type ScheduledMeeting = {
   id: string;
@@ -28,6 +29,14 @@ export default function DashboardClient({ scheduledMeetings: initial, recentMeet
   const [openPlan, setOpenPlan] = useState(false);
   const [scheduled, setScheduled] = useState(initial);
   const syncStarted = useRef(false);
+  const {
+    startRecording,
+    openConflict,
+    closeAndRetry,
+    loading: starting,
+    error: recordError,
+    conflict,
+  } = useQuickRecord();
 
   // Stil synchroniseren met Outlook bij openen dashboard (als gekoppeld)
   useEffect(() => {
@@ -65,6 +74,76 @@ export default function DashboardClient({ scheduledMeetings: initial, recentMeet
 
   return (
     <>
+      {/* Snelle opname — één klik */}
+      <div className="mb-8 rounded-xl border border-indigo-200 bg-gradient-to-r from-indigo-600 to-violet-600 p-5 text-white shadow-md sm:p-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-1">
+            <p className="text-xs font-semibold uppercase tracking-wide text-indigo-100">
+              Snel starten
+            </p>
+            <h2 className="text-lg font-semibold">Opname met één klik</h2>
+            <p className="text-sm text-indigo-100 max-w-xl">
+              Teams in je agenda? Dan microfoon + systeemgeluid. Anders alleen microfoon.
+              De titel komt uit je agenda of wordt na afloop door AI bepaald.
+            </p>
+          </div>
+          <Button
+            size="lg"
+            variant="secondary"
+            onClick={startRecording}
+            disabled={starting}
+            className="w-full shrink-0 gap-2 bg-white text-indigo-700 hover:bg-indigo-50 sm:w-auto"
+          >
+            {starting ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : (
+              <Mic className="h-5 w-5" />
+            )}
+            {starting ? "Opname voorbereiden…" : "Start opname"}
+            {!starting && <ArrowRight className="h-4 w-4" />}
+          </Button>
+        </div>
+        {recordError && (
+          <p className="mt-3 rounded-lg bg-white/15 px-3 py-2 text-sm text-white">
+            {recordError}
+          </p>
+        )}
+        {conflict && (
+          <div className="mt-3 rounded-lg bg-white/15 px-3 py-3 text-sm text-white">
+            <p className="font-medium">Er loopt al een opname: “{conflict.title}”.</p>
+            <p className="mt-0.5 text-xs text-indigo-100">
+              Hervat die opname, of sluit ’m af om een nieuwe te starten.
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={openConflict}
+                disabled={starting}
+                className="gap-2 bg-white text-indigo-700 hover:bg-indigo-50"
+              >
+                <Play className="h-4 w-4" />
+                Opname hervatten
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={closeAndRetry}
+                disabled={starting}
+                className="gap-2 bg-indigo-800/60 text-white hover:bg-indigo-800"
+              >
+                {starting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Mic className="h-4 w-4" />
+                )}
+                {starting ? "Bezig…" : "Afsluiten & nieuwe starten"}
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Geplande vergaderingen */}
       {scheduled.length > 0 && (
         <div className="mb-8">
@@ -131,6 +210,14 @@ export default function DashboardClient({ scheduledMeetings: initial, recentMeet
             <h3 className="font-semibold text-gray-700">Nog geen meetings</h3>
             <p className="mt-1 text-sm text-gray-400">Start een opname of plan een vergadering</p>
           </div>
+          <Button size="lg" onClick={startRecording} disabled={starting} className="gap-2">
+            {starting ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : (
+              <Mic className="h-5 w-5" />
+            )}
+            {starting ? "Opname voorbereiden…" : "Start opname"}
+          </Button>
         </div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">

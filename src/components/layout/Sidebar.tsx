@@ -68,7 +68,7 @@ export default function Sidebar({ onNavigate }: SidebarProps) {
     { href: "/", label: "Dashboard", icon: LayoutDashboard },
     { href: "/meetings", label: "Meetings", icon: FileText },
     { href: "/acties", label: "Acties", icon: CheckSquare },
-    { href: "/record", label: "Nieuwe opname", icon: Mic },
+    { href: "/record", label: "Opname starten", icon: Mic },
     { href: "/medewerkers", label: "Medewerkers", icon: Users },
   ];
 

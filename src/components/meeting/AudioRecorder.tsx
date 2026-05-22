@@ -5,19 +5,27 @@ import { Mic, MicOff, Pause, Play, Square, Loader2, Monitor, Users, RefreshCw, C
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { formatDuration } from "@/lib/utils";
-import type { RecordingState } from "@/types";
+import type { AudioCaptureMode, RecordingState } from "@/types";
 import { cn } from "@/lib/utils";
 
 export type TranscribeResultMeta = {
   provisional?: boolean;
 };
 
-/** Fysiek = alleen microfoon. Hybride/online = microfoon + systeem-audio gemengd. */
-export type AudioCaptureMode = "physical" | "online" | "hybrid";
+export type { AudioCaptureMode };
 
 type Props = {
   meetingId: string;
   onTranscribed: (transcript: string, title: string, meta?: TranscribeResultMeta) => void;
+  /** Vereenvoudigde bediening: geen modus-keuze, één startknop. */
+  variant?: "full" | "quick";
+  /** Vooraf bepaalde opnamemodus — geen modus-keuze meer.
+   *  'quick'-variant: start automatisch (autoStartToken).
+   *  'full'-variant: toont één 'Start opname'-knop. */
+  presetCaptureMode?: AudioCaptureMode | null;
+  autoStartToken?: number;
+  /** Korte uitleg boven de knoppen (bv. Teams gedetecteerd). */
+  statusHint?: string | null;
 };
 
 /** Hoe lang elke MediaRecorder-segment maximaal opneemt voordat-ie wordt geroteerd.
@@ -32,8 +40,14 @@ const CHUNK_INTERVAL_MS = 1000;
  */
 function getDisplayMediaWithAudio(): Promise<MediaStream> {
   return navigator.mediaDevices.getDisplayMedia({
-    video: true,
+    // 'browser' opent de kiezer meteen op het tabblad-overzicht — daar zit
+    // (zeker op macOS) de enige bron die tab-audio kan meegeven.
+    video: { displaySurface: "browser" },
     audio: true,
+    // Extra hints; browsers die ze niet kennen, negeren ze stilletjes.
+    systemAudio: "include",
+    surfaceSwitching: "include",
+    selfBrowserSurface: "exclude", // verberg de AI-Meetings-tab zelf
   } as DisplayMediaStreamOptions);
 }
 
@@ -70,7 +84,18 @@ function isPhoneMic(label: string): boolean {
 }
 
 
-export default function AudioRecorder({ meetingId, onTranscribed }: Props) {
+export default function AudioRecorder({
+  meetingId,
+  onTranscribed,
+  variant = "full",
+  presetCaptureMode = null,
+  autoStartToken = 0,
+  statusHint = null,
+}: Props) {
+  const isQuick = variant === "quick";
+  /** Eén-knops bediening zonder modus-keuze — geldt voor de quick-variant én
+   *  voor de meeting-pagina die de modus vooraf doorgeeft. */
+  const simpleMode = presetCaptureMode != null;
   const [captureMode, setCaptureMode] = useState<AudioCaptureMode | null>(null);
   const [state, setState] = useState<RecordingState>("idle");
   const [duration, setDuration] = useState(0);
@@ -375,7 +400,10 @@ export default function AudioRecorder({ meetingId, onTranscribed }: Props) {
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("Permission denied") || msg.includes("NotAllowedError")) {
+      if (/user gesture|transient activation|user activation/i.test(msg)) {
+        // Auto-start net na een paginawissel kan buiten het klik-venster vallen.
+        setError("Klik op 'Start opname' om de schermdeling te starten.");
+      } else if (msg.includes("Permission denied") || msg.includes("NotAllowedError")) {
         setError("Toestemming geweigerd — controleer microfoon- en schermrechten in je browser.");
       } else if (msg.includes("AbortError") || msg.includes("cancelled") || msg.includes("dismissed")) {
         setError("Schermdeling geannuleerd. Klik op Start om het opnieuw te proberen.");
@@ -384,6 +412,16 @@ export default function AudioRecorder({ meetingId, onTranscribed }: Props) {
       }
     }
   }, [meetingId, micAudioConstraints, scheduleNextRotate, startNewRecorder]);
+
+  const autoStartAttemptedRef = useRef(0);
+  useEffect(() => {
+    if (!presetCaptureMode || autoStartToken <= 0) return;
+    if (autoStartAttemptedRef.current === autoStartToken) return;
+    if (state !== "idle") return;
+    autoStartAttemptedRef.current = autoStartToken;
+    setCaptureMode(presetCaptureMode);
+    void start(presetCaptureMode);
+  }, [presetCaptureMode, autoStartToken, state, start]);
 
   const pause = useCallback(() => {
     if (mediaRecorderRef.current?.state === "recording") {
@@ -557,6 +595,12 @@ export default function AudioRecorder({ meetingId, onTranscribed }: Props) {
         <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700 whitespace-pre-wrap">{error}</div>
       )}
 
+      {statusHint && state === "idle" && (
+        <p className="text-center text-sm text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-lg px-4 py-2">
+          {statusHint}
+        </p>
+      )}
+
       <div className="flex flex-col items-center gap-6">
         {/* Pulserende indicator */}
         <div className="relative flex h-24 w-24 items-center justify-center">
@@ -596,8 +640,12 @@ export default function AudioRecorder({ meetingId, onTranscribed }: Props) {
           <div className="font-mono text-2xl font-bold text-gray-800">{formatDuration(duration)}</div>
         )}
 
-        {/* Modus-keuze (alleen in idle) */}
-        {state === "idle" && (
+        {(state === "recording" || state === "paused") && statusHint && (
+          <p className="text-center text-xs text-gray-600 max-w-md">{statusHint}</p>
+        )}
+
+        {/* Modus-keuze (alleen full + idle, zónder vooraf bepaalde modus) */}
+        {state === "idle" && !isQuick && !presetCaptureMode && (
           <div className="w-full max-w-lg space-y-3">
             {/* Microfoon-selector */}
             {availableMics.length > 0 && (
@@ -789,6 +837,18 @@ export default function AudioRecorder({ meetingId, onTranscribed }: Props) {
           </div>
         )}
 
+        {/* Eén startknop — opnamemodus is vooraf bepaald (meeting-pagina) */}
+        {state === "idle" && !isQuick && presetCaptureMode && (
+          <Button
+            onClick={() => start(presetCaptureMode)}
+            size="lg"
+            className="w-full max-w-sm gap-2"
+          >
+            <Mic className="h-4 w-4" />
+            Start opname
+          </Button>
+        )}
+
         {/* Waarschuwing schermdeling open houden (alleen online/hybride) */}
         {(state === "recording" || state === "paused") && activeModeRef.current !== "physical" && (
           <p className="text-center text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 max-w-md">
@@ -797,27 +857,53 @@ export default function AudioRecorder({ meetingId, onTranscribed }: Props) {
         )}
 
         {/* Bedieningsknoppen tijdens opname */}
-        <div className="flex flex-wrap items-center justify-center gap-3">
+        <div
+          className={cn(
+            "flex flex-wrap items-center justify-center gap-3",
+            simpleMode && "w-full max-w-sm flex-col sm:flex-row",
+          )}
+        >
           {state === "recording" && (
             <>
-              <Button onClick={pause} variant="outline" size="icon">
+              <Button
+                onClick={pause}
+                variant="outline"
+                size={simpleMode ? "lg" : "icon"}
+                className={cn(simpleMode && "w-full sm:w-auto gap-2 flex-1")}
+              >
                 <Pause className="h-4 w-4" />
+                {simpleMode && "Pauzeer"}
               </Button>
-              <Button onClick={stop} variant="destructive" className="gap-2">
+              <Button
+                onClick={stop}
+                variant="destructive"
+                size={simpleMode ? "lg" : "default"}
+                className={cn("gap-2", simpleMode && "w-full sm:w-auto flex-1")}
+              >
                 <Square className="h-4 w-4" />
-                Stop & transcriptie
+                {simpleMode ? "Stop" : "Stop & transcriptie"}
               </Button>
             </>
           )}
           {state === "paused" && (
             <>
-              <Button onClick={resume} variant="outline" className="gap-2">
+              <Button
+                onClick={resume}
+                variant="outline"
+                size={simpleMode ? "lg" : "default"}
+                className={cn("gap-2", simpleMode && "w-full sm:w-auto flex-1")}
+              >
                 <Play className="h-4 w-4" />
                 Hervat
               </Button>
-              <Button onClick={stop} variant="destructive" className="gap-2">
+              <Button
+                onClick={stop}
+                variant="destructive"
+                size={simpleMode ? "lg" : "default"}
+                className={cn("gap-2", simpleMode && "w-full sm:w-auto flex-1")}
+              >
                 <Square className="h-4 w-4" />
-                Stop & transcriptie
+                {simpleMode ? "Stop" : "Stop & transcriptie"}
               </Button>
             </>
           )}

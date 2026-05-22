@@ -76,6 +76,8 @@ model Meeting {
   duration    Int?
   audioPath   String?
   scheduledAt DateTime?
+  /// Eindtijd uit Outlook (voor detectie van lopende agenda-vergaderingen)
+  scheduledEndAt DateTime?
   /// JSON: AgendaItem[] – agenda voor geplande vergaderingen
   agenda      String?
   /// Outlook Graph event-id (voor bidirectionele sync)

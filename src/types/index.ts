@@ -19,4 +19,7 @@ export type TranscriptSegment = {
 
 export type RecordingState = "idle" | "recording" | "paused" | "processing" | "done";
 
+/** Fysiek = alleen microfoon. Hybride/online = microfoon + systeem-audio gemengd. */
+export type AudioCaptureMode = "physical" | "online" | "hybrid";
+
 export type Platform = "zoom" | "google_meet" | "teams" | "slack" | "webex" | "other";

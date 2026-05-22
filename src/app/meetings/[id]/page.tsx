@@ -45,10 +45,24 @@ export default function MeetingDetailPage() {
   const pdfSourceRef = useRef<HTMLDivElement>(null);
   const emptyActionItems = useMemo(() => [], []);
   const [agendaItems, setAgendaItems] = useState<AgendaItem[]>([]);
+  /** >0 wanneer de opname automatisch moet starten (één-klik vanaf dashboard). */
+  const [recordAutoStartToken, setRecordAutoStartToken] = useState(0);
 
   useEffect(() => {
     loadMeeting();
   }, [id]);
+
+  // Eén-klik opname: ?record=1 in de URL → opname meteen starten.
+  // De parameter wordt daarna verwijderd zodat een refresh niet opnieuw start.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("record") === "1") {
+      setRecordAutoStartToken(1);
+      url.searchParams.delete("record");
+      window.history.replaceState(null, "", url.toString());
+    }
+  }, []);
 
   useEffect(() => {
     fetch("/api/templates")
@@ -557,18 +571,36 @@ const pendingActions = meeting.actionItems?.filter((i: any) => !i.completed).len
               />
             </div>
 
-            {/* Recording */}
-            {meeting.status !== "completed" && (
-              <div>
-                <h2 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                  <Mic className="h-4 w-4" /> Opname
-                </h2>
-                <AudioRecorder
-                  meetingId={id}
-                  onTranscribed={onTranscribed}
-                />
-              </div>
-            )}
+            {/* Recording — opnamemodus wordt automatisch bepaald uit de meeting */}
+            {meeting.status !== "completed" && (() => {
+              const isOnlineMeeting = Boolean(
+                meeting.teamsJoinUrl ||
+                  ["teams", "zoom", "google_meet", "webex"].includes(
+                    String(meeting.platform || "").toLowerCase(),
+                  ),
+              );
+              return (
+                <div>
+                  <h2 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                    <Mic className="h-4 w-4" /> Opname
+                  </h2>
+                  <AudioRecorder
+                    meetingId={id}
+                    presetCaptureMode={isOnlineMeeting ? "hybrid" : "physical"}
+                    // Fysiek: opname start direct (alleen microfoon, geen venster).
+                    // Online: niet automatisch — de browser eist een klik vlak
+                    // vóór het scherm-deelvenster, dus de gebruiker klikt Start.
+                    autoStartToken={isOnlineMeeting ? 0 : recordAutoStartToken}
+                    statusHint={
+                      isOnlineMeeting
+                        ? "Online meeting — je microfoon + het geluid van de call. Klik op ‘Start opname’ en kies in het venster het tabblad of scherm van het gesprek, mét ‘Geluid delen’ aangevinkt."
+                        : "Fysieke meeting — opname via de microfoon."
+                    }
+                    onTranscribed={onTranscribed}
+                  />
+                </div>
+              );
+            })()}
 
             {/* Transcript — getoond zodra beschikbaar, "Voorlopig" zolang Whisper nog bezig is */}
             {meeting.transcript && (

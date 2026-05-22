@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { transcribeAudio, generateTitle } from "@/lib/openai";
+import { isProvisionalMeetingTitle } from "@/lib/meeting-recording";
 
 /**
  * Per-chunk Whisper-transcriptie. Elke chunk is een complete WebM van ~7-8 minuten
@@ -138,11 +139,7 @@ export async function POST(
       }
 
       const m = await prisma.meeting.findUnique({ where: { id } });
-      if (
-        m &&
-        newContent &&
-        (m.title === "Naamloze meeting" || m.title === "Untitled Meeting")
-      ) {
+      if (m && newContent && isProvisionalMeetingTitle(m.title)) {
         try {
           updateData.title = await generateTitle(newContent);
         } catch (err) {

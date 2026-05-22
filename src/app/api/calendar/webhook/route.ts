@@ -113,6 +113,7 @@ async function processNotification(userId: string, notification: GraphNotificati
 
   const event = (await res.json()) as OutlookEvent;
   const scheduledAt = new Date(event.start.dateTime);
+  const scheduledEndAt = new Date(event.end.dateTime);
   const isTeams =
     event.isOnlineMeeting &&
     (event.onlineMeetingProvider ?? "").toLowerCase().includes("teams");
@@ -129,6 +130,7 @@ async function processNotification(userId: string, notification: GraphNotificati
         data: {
           title: event.subject || existing.title,
           scheduledAt,
+          scheduledEndAt,
           platform: isTeams ? "teams" : existing.platform ?? "other",
           teamsJoinUrl: event.onlineMeeting?.joinUrl ?? existing.teamsJoinUrl,
         },
@@ -150,6 +152,7 @@ async function processNotification(userId: string, notification: GraphNotificati
       status: "scheduled",
       platform: isTeams ? "teams" : "other",
       scheduledAt,
+      scheduledEndAt,
       outlookEventId,
       teamsJoinUrl: event.onlineMeeting?.joinUrl ?? null,
       participants: { create: participants },
