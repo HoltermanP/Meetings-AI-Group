@@ -3,6 +3,12 @@ import { writeFile, unlink } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import { chatCompletion, chatCompletionMulti, chatCompletionNotesStream } from "@/lib/llm";
+import {
+  getAnalysisReportStructure,
+  getAnalysisReportMaxTokens,
+  isComprehensiveReportType,
+  type AnalysisReportType,
+} from "@/lib/analysis-report-types";
 
 /** Whisper-transcriptie blijft via OpenAI (geen Anthropic speech-to-text). */
 export const openai = new OpenAI({
@@ -53,6 +59,12 @@ export type GenerateMeetingNotesContext = {
   meetingTypeContext?: string | null;
   /** Korte omschrijving van de focus van dit overlegtype (wordt bovenaan system prompt gezet). */
   outputFocus?: string | null;
+  /** Gekozen consultancy-rapporttype (overschrijft standaard verslagstructuur). */
+  reportType?: AnalysisReportType;
+  /** Actiepunten als JSON naar de database extraheren */
+  extractActionItems?: boolean;
+  /** Geüploade documenten + eerdere projectmeetings (geformatteerde tekst). */
+  extraContext?: string | null;
 };
 
 type MeetingNotesPromptBundle = {
@@ -98,17 +110,24 @@ function buildMeetingNotesPrompts(
   const fillKeys = (template?.wordPlaceholderKeys || []).filter(Boolean);
   const hasWordFields = fillKeys.length > 0;
 
-  const hasReportTemplate = Boolean(template?.reportStructure?.trim());
-  const reportBlock = hasReportTemplate
-    ? `Het verslag moet ALLEEN bestaan uit inhoud volgens onderstaande sjabloonstructuur (vertaal koppen naar Nederlands waar nodig). Voeg geen extra secties, inleiding, samenvatting-kop of datumkop toe die niet in de structuur staan. Geen tekst vóór de eerste ##-kop behalve als de structuur dat expliciet vraagt.
+  const reportType = context?.reportType;
+  const extractActionItems = context?.extractActionItems ?? true;
+
+  const hasReportTemplate = Boolean(template?.reportStructure?.trim()) && !reportType;
+  const reportBlock = reportType
+    ? getAnalysisReportStructure(reportType)
+    : hasReportTemplate
+      ? `Het verslag moet ALLEEN bestaan uit inhoud volgens onderstaande sjabloonstructuur (vertaal koppen naar Nederlands waar nodig). Voeg geen extra secties, inleiding, samenvatting-kop of datumkop toe die niet in de structuur staan. Geen tekst vóór de eerste ##-kop behalve als de structuur dat expliciet vraagt.
 
 Sjabloonstructuur:
 ${template!.reportStructure}`
-    : STANDAARD_VERSLAG_FORMAT;
+      : STANDAARD_VERSLAG_FORMAT;
 
-  const actionBlock = template?.actionItemsInstructions?.trim()
-    ? `Actiepunten — volg strikt deze instructies voor extractie en velden:\n${template.actionItemsInstructions}\n\nLever de actiepunten als JSON-array van objecten met minstens "title"; voeg toe wat de instructies vragen (bijv. assignee, dueDate als tekst, priority).`
-    : `${AI_KIEST_ACTIES}\n\nLever een JSON-array van objecten: { "title": string, "assignee"?: string, "description"?: string }.`;
+  const actionBlock = !extractActionItems
+    ? `Geen aparte actielijst extraheren. Lever een lege JSON-array: [].`
+    : template?.actionItemsInstructions?.trim()
+      ? `Actiepunten — volg strikt deze instructies voor extractie en velden:\n${template.actionItemsInstructions}\n\nLever de actiepunten als JSON-array van objecten met minstens "title"; voeg toe wat de instructies vragen (bijv. assignee, dueDate als tekst, priority).`
+      : `${AI_KIEST_ACTIES}\n\nLever een JSON-array van objecten: { "title": string, "assignee"?: string, "description"?: string }.`;
 
   const participantBlock = formatParticipantsForPrompt(context?.participants);
 
@@ -118,6 +137,10 @@ ${template!.reportStructure}`
 
   const outputFocusBlock = context?.outputFocus?.trim()
     ? `\nFOCUS VAN DIT OVERLEG: ${context.outputFocus.trim()}\n`
+    : "";
+
+  const documentsBlock = context?.extraContext?.trim()
+    ? `\nAANVULLENDE BRONNEN: Naast het transcript van deze meeting ontvang je contextdocumenten en/of transcripten van eerdere meetings in hetzelfde project. Gebruik die bronnen actief in je analyse; benoem tegenstrijdigheden of lacunes waar relevant.\n`
     : "";
 
   const wordBlock = hasWordFields
@@ -133,10 +156,16 @@ Regels:
 `
     : "";
 
-  const systemPrompt = `Je bent een expert in het maken van vergadernotities en actielijsten. Je zet transcripten om naar duidelijke, gestructureerde notities in het Nederlands.
+  const roleLine = reportType
+    ? isComprehensiveReportType(reportType)
+      ? "Je bent een senior partner bij een top-tier management consultancy. Je levert uitgebreide, board-ready analyserapporten en adviesrapporten in het Nederlands — diepgaand, gestructureerd en onderbouwd."
+      : "Je bent een senior management consultant. Je zet vergadertranscripten om naar professionele analyserapporten in het Nederlands."
+    : "Je bent een expert in het maken van vergadernotities en actielijsten. Je zet transcripten om naar duidelijke, gestructureerde notities in het Nederlands.";
+
+  const systemPrompt = `${roleLine}
 
 ${TAAL_NL}
-${outputFocusBlock}${meetingTypeBlock}
+${outputFocusBlock}${meetingTypeBlock}${documentsBlock}
 VERSLAG:
 ${reportBlock}
 ${wordBlock}
@@ -144,12 +173,17 @@ ${wordBlock}
 ACTIELIJST:
 ${actionBlock}`;
 
+  const extraContextBlock = context?.extraContext?.trim()
+    ? `\n${context.extraContext.trim()}`
+    : "";
+
   const userPrompt = hasWordFields
     ? `Analyseer dit vergadertranscript.
 
 TRANSCRIPT:
 ${transcript}
 ${participantBlock}
+${extraContextBlock}
 
 ${rawNotes ? `\nAANVULLENDE NOTITIES VAN DEELNEMER:\n${rawNotes}` : ""}
 
@@ -168,6 +202,7 @@ Voorbeeld:
 TRANSCRIPT:
 ${transcript}
 ${participantBlock}
+${extraContextBlock}
 
 ${rawNotes ? `\nAANVULLENDE NOTITIES VAN DEELNEMER:\n${rawNotes}` : ""}
 
@@ -179,10 +214,12 @@ Lever in één antwoord:
 \`\`\`
 Als er geen actiepunten zijn: [].`;
 
+  const reportMaxTokens = reportType ? getAnalysisReportMaxTokens(reportType) : 4096;
+
   return {
     systemPrompt,
     userPrompt,
-    maxTokens: hasWordFields ? 8192 : 4096,
+    maxTokens: hasWordFields ? 8192 : reportMaxTokens,
     hasWordFields,
     fillKeys,
   };

@@ -37,3 +37,36 @@ export async function removeTemplateDocx(relativePath: string | null): Promise<v
     /* weg is weg */
   }
 }
+
+export function contextDocumentRelativePath(
+  userId: string,
+  documentId: string,
+  fileName: string,
+): string {
+  const safe = fileName.replace(/[/\\:*?"<>|]/g, "_").slice(0, 120);
+  return path.join("documents", userId, `${documentId}_${safe}`);
+}
+
+export async function writeContextDocument(
+  userId: string,
+  documentId: string,
+  fileName: string,
+  buffer: Buffer,
+): Promise<string> {
+  await ensureUploadsDir();
+  const rel = contextDocumentRelativePath(userId, documentId, fileName);
+  const full = absolutePathFromRelative(rel);
+  await fs.mkdir(path.dirname(full), { recursive: true });
+  await fs.writeFile(full, buffer);
+  return rel.split(path.sep).join("/");
+}
+
+export async function removeContextDocument(relativePath: string | null): Promise<void> {
+  if (!relativePath) return;
+  const full = absolutePathFromRelative(relativePath);
+  try {
+    await fs.unlink(full);
+  } catch {
+    /* weg is weg */
+  }
+}

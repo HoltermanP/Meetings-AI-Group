@@ -64,6 +64,7 @@ model Project {
   meetings      Meeting[]
   actionItems   ActionItem[]
   participants  ProjectParticipant[]
+  documents     ContextDocument[]
 }
 
 model Meeting {
@@ -104,6 +105,32 @@ model Meeting {
   chatMessages ChatMessage[]
   participants Participant[]
   tags         MeetingTag[]
+  documents    ContextDocument[]
+}
+
+/// Geüploade contextdocumenten (PDF, Word, tekst) voor analyses en adviezen.
+model ContextDocument {
+  id            String   @id @default(cuid())
+  fileName      String
+  mimeType      String
+  sizeBytes     Int
+  /// Relatief pad onder uploads/ (documents/{userId}/…)
+  storagePath   String
+  /// Geëxtraheerde platte tekst voor AI-context
+  extractedText String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  userId    String
+  meetingId String?
+  projectId String?
+
+  meeting Meeting? @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([meetingId])
+  @@index([projectId])
+  @@index([userId])
 }
 
 model Transcript {

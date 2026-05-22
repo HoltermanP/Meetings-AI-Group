@@ -23,3 +23,5 @@ export type RecordingState = "idle" | "recording" | "paused" | "processing" | "d
 export type AudioCaptureMode = "physical" | "online" | "hybrid";
 
 export type Platform = "zoom" | "google_meet" | "teams" | "slack" | "webex" | "other";
+
+export type { AnalysisReportType } from "@/lib/analysis-report-types";

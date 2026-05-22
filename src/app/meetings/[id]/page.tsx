@@ -18,6 +18,11 @@ import {
 import TranscriptView from "@/components/meeting/TranscriptView";
 import AgendaView, { type AgendaItem } from "@/components/meeting/AgendaView";
 import ParticipantsList from "@/components/meeting/ParticipantsList";
+import AnalysisReportSelector, {
+  DEFAULT_ANALYSIS_REPORT_TYPE,
+} from "@/components/meeting/AnalysisReportSelector";
+import ContextDocumentsPanel from "@/components/meeting/ContextDocumentsPanel";
+import type { AnalysisReportType } from "@/lib/analysis-report-types";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { formatDateTime, formatDuration, platformIcon } from "@/lib/utils";
@@ -47,6 +52,9 @@ export default function MeetingDetailPage() {
   const [agendaItems, setAgendaItems] = useState<AgendaItem[]>([]);
   /** >0 wanneer de opname automatisch moet starten (één-klik vanaf dashboard). */
   const [recordAutoStartToken, setRecordAutoStartToken] = useState(0);
+  const [reportType, setReportType] = useState<AnalysisReportType>(DEFAULT_ANALYSIS_REPORT_TYPE);
+  const [lastReportLabel, setLastReportLabel] = useState<string | null>(null);
+  const [includeProjectContext, setIncludeProjectContext] = useState(true);
 
   useEffect(() => {
     loadMeeting();
@@ -93,19 +101,23 @@ export default function MeetingDetailPage() {
     setEditingTitle(false);
   }
 
-  async function generateNotes() {
+  async function runAnalysis() {
     setGeneratingNotes(true);
     try {
-      const res = await fetch(`/api/meetings/${id}/generate-notes`, {
+      const res = await fetch(`/api/meetings/${id}/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rawNotes }),
+        body: JSON.stringify({
+          rawNotes,
+          reportType,
+          includeProjectContext: meeting?.projectId ? includeProjectContext : false,
+        }),
       });
 
       const contentType = res.headers.get("content-type") || "";
 
       if (!res.ok && !contentType.includes("text/event-stream")) {
-        let msg = `Notities genereren mislukt (${res.status}).`;
+        let msg = `Analyserapport genereren mislukt (${res.status}).`;
         try {
           const errBody = await res.json();
           if (typeof errBody.error === "string") msg = errBody.error;
@@ -145,7 +157,13 @@ export default function MeetingDetailPage() {
             .map((l) => l.slice(6))
             .join("\n");
           if (!dataLine.trim()) continue;
-          let payload: { type?: string; text?: string; meeting?: unknown; error?: string };
+          let payload: {
+            type?: string;
+            text?: string;
+            meeting?: unknown;
+            error?: string;
+            reportLabel?: string;
+          };
           try {
             payload = JSON.parse(dataLine) as typeof payload;
           } catch {
@@ -165,6 +183,9 @@ export default function MeetingDetailPage() {
               actionItems?: unknown;
               template?: unknown;
             };
+            if (typeof payload.reportLabel === "string") {
+              setLastReportLabel(payload.reportLabel);
+            }
             setMeeting((prev: any) => ({
               ...prev,
               ...m,
@@ -173,7 +194,7 @@ export default function MeetingDetailPage() {
               template: m.template ?? prev.template,
             }));
           } else if (payload.type === "error") {
-            alert(typeof payload.error === "string" ? payload.error : "Notities genereren mislukt.");
+            alert(typeof payload.error === "string" ? payload.error : "Analyserapport genereren mislukt.");
             return;
           }
         }
@@ -464,10 +485,10 @@ const pendingActions = meeting.actionItems?.filter((i: any) => !i.completed).len
             </div>
 
             <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
-              {meeting.transcript && !meeting.notes && (
+              {meeting.transcript && (
                 <Button
-                  onClick={generateNotes}
-                  disabled={generatingNotes}
+                  onClick={runAnalysis}
+                  disabled={generatingNotes || meeting.transcript?.isProvisional}
                   className="gap-2"
                   size="sm"
                 >
@@ -476,15 +497,10 @@ const pendingActions = meeting.actionItems?.filter((i: any) => !i.completed).len
                   ) : (
                     <Wand2 className="h-4 w-4" />
                   )}
-                  <span className="sm:hidden">Notities</span>
-                  <span className="hidden sm:inline">Notities genereren</span>
-                </Button>
-              )}
-              {meeting.notes && (
-                <Button onClick={generateNotes} disabled={generatingNotes} variant="outline" size="sm" className="gap-2">
-                  {generatingNotes ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-                  <span className="inline sm:hidden">Opnieuw</span>
-                  <span className="hidden sm:inline">Opnieuw genereren</span>
+                  <span className="sm:hidden">Analyseren</span>
+                  <span className="hidden sm:inline">
+                    {meeting.notes ? "Opnieuw analyseren" : "Analyseren"}
+                  </span>
                 </Button>
               )}
               {meeting.notes && (
@@ -602,6 +618,8 @@ const pendingActions = meeting.actionItems?.filter((i: any) => !i.completed).len
               );
             })()}
 
+            <ContextDocumentsPanel scope="meeting" entityId={id} />
+
             {/* Transcript — getoond zodra beschikbaar, "Voorlopig" zolang Whisper nog bezig is */}
             {meeting.transcript && (
               <div>
@@ -635,30 +653,71 @@ const pendingActions = meeting.actionItems?.filter((i: any) => !i.completed).len
               </div>
             )}
 
-            {/* Template vóór genereren */}
-            {meeting.transcript && (
-              <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-4 space-y-2">
-                <Label className="text-gray-800">Template voor verslag & actielijst</Label>
-                <Select
-                  value={templateId || "__none__"}
-                  onValueChange={(v) => saveTemplateChoice(v === "__none__" ? "" : v)}
-                  disabled={savingTemplate}
-                >
-                  <SelectTrigger className="max-w-full bg-white sm:max-w-md">
-                    <SelectValue placeholder="Template" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">Geen — AI kiest format</SelectItem>
-                    {templates.map((t) => (
-                      <SelectItem key={t.id} value={t.id}>
-                        {t.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-gray-600">
-                  Kies een template voor de verslagstructuur en actielijst-instructies.
-                </p>
+            {/* Analyserapport + optioneel template */}
+            {meeting.transcript && !meeting.transcript?.isProvisional && (
+              <div className="rounded-xl border border-indigo-200 bg-white p-4 sm:p-5 space-y-4 shadow-sm">
+                <AnalysisReportSelector
+                  value={reportType}
+                  onChange={setReportType}
+                  disabled={generatingNotes}
+                />
+                {meeting.projectId && (
+                  <label className="flex items-start gap-2 text-sm text-gray-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="mt-1 rounded border-gray-300"
+                      checked={includeProjectContext}
+                      disabled={generatingNotes}
+                      onChange={(e) => setIncludeProjectContext(e.target.checked)}
+                    />
+                    <span>
+                      <span className="font-medium">Projectcontext meenemen</span>
+                      <span className="block text-xs text-muted-foreground mt-0.5">
+                        Projectdocumenten en transcripten van eerdere meetings in dit project
+                        worden meegenomen in het rapport.
+                      </span>
+                    </span>
+                  </label>
+                )}
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between pt-1 border-t border-gray-100">
+                  <p className="text-xs text-gray-500">
+                    Het gekozen rapporttype bepaalt structuur en toon. Optioneel template hieronder
+                    voor extra actie-instructies of Word-export.
+                  </p>
+                  <Button
+                    onClick={runAnalysis}
+                    disabled={generatingNotes}
+                    size="lg"
+                    className="gap-2 shrink-0 w-full sm:w-auto"
+                  >
+                    {generatingNotes ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Wand2 className="h-4 w-4" />
+                    )}
+                    {meeting.notes ? "Opnieuw analyseren" : "Analyseren"}
+                  </Button>
+                </div>
+                <div className="space-y-2 pt-2 border-t border-gray-100">
+                  <Label className="text-gray-700 text-xs">Optioneel: template</Label>
+                  <Select
+                    value={templateId || "__none__"}
+                    onValueChange={(v) => saveTemplateChoice(v === "__none__" ? "" : v)}
+                    disabled={savingTemplate || generatingNotes}
+                  >
+                    <SelectTrigger className="max-w-full bg-gray-50 sm:max-w-md">
+                      <SelectValue placeholder="Template" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">Geen template</SelectItem>
+                      {templates.map((t) => (
+                        <SelectItem key={t.id} value={t.id}>
+                          {t.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
             )}
 
@@ -679,8 +738,13 @@ const pendingActions = meeting.actionItems?.filter((i: any) => !i.completed).len
             {/* Generated Notes */}
             {meeting.notes && (
               <div>
-                <h2 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                  <FileText className="h-4 w-4" /> Vergadernotities
+                <h2 className="text-sm font-semibold text-gray-700 mb-3 flex flex-wrap items-center gap-2">
+                  <FileText className="h-4 w-4" /> Analyserapport
+                  {lastReportLabel && (
+                    <Badge variant="secondary" className="font-normal text-xs">
+                      {lastReportLabel}
+                    </Badge>
+                  )}
                 </h2>
                 <NotesEditor
                   key={meeting.notes.updatedAt || meeting.notes.id}

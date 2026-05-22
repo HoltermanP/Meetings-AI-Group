@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import PlanMeetingDialog from "@/components/project/PlanMeetingDialog";
+import ContextDocumentsPanel from "@/components/meeting/ContextDocumentsPanel";
 
 type Project = {
   id: string;
@@ -214,6 +215,10 @@ export default function ProjectDetailPage() {
               <Trash2 className="h-4 w-4" />
             </Button>
           )}
+        </div>
+
+        <div className="mb-6">
+          <ContextDocumentsPanel scope="project" entityId={id} />
         </div>
 
         {/* Plan vergadering knop */}
