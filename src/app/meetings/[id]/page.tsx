@@ -649,6 +649,16 @@ const pendingActions = meeting.actionItems?.filter((i: any) => !i.completed).len
                     return [];
                   })()}
                   isProvisional={Boolean(meeting.transcript?.isProvisional)}
+                  onRenameSpeaker={async (from, to) => {
+                    const res = await fetch(`/api/meetings/${id}/speakers`, {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ from, to }),
+                    });
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    if (data.transcript) setMeeting((m: any) => ({ ...m, transcript: data.transcript }));
+                  }}
                 />
               </div>
             )}

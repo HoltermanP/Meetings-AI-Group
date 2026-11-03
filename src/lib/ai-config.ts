@@ -2,7 +2,7 @@
  * Taak-specifieke modelkeuze: het zwaarste redeneerwerk krijgt het sterkste model,
  * korte/structurele taken het snellere en goedkopere model.
  */
-export type AiTask = "notes" | "chat" | "actions" | "title";
+export type AiTask = "notes" | "chat" | "actions" | "title" | "speakers";
 
 export type AiProviderMode = "openai" | "anthropic" | "auto";
 
@@ -22,6 +22,8 @@ const OPENAI_DEFAULTS: Record<AiTask, string> = {
   chat: env("OPENAI_MODEL_CHAT", "gpt-4o"),
   actions: env("OPENAI_MODEL_ACTIONS", "gpt-4o-mini"),
   title: env("OPENAI_MODEL_TITLE", "gpt-4o-mini"),
+  /** Namen aan sprekers koppelen — fouten vervuilen stemprofielen, dus sterk model */
+  speakers: env("OPENAI_MODEL_SPEAKERS", "gpt-4o"),
 };
 
 const ANTHROPIC_DEFAULTS: Record<AiTask, string> = {
@@ -32,6 +34,8 @@ const ANTHROPIC_DEFAULTS: Record<AiTask, string> = {
   /** JSON / extractie — Haiku (snel, goedkoop) */
   actions: env("ANTHROPIC_MODEL_ACTIONS", "claude-haiku-4-5"),
   title: env("ANTHROPIC_MODEL_TITLE", "claude-haiku-4-5"),
+  /** Namen aan sprekers koppelen — fouten vervuilen stemprofielen, dus Sonnet */
+  speakers: env("ANTHROPIC_MODEL_SPEAKERS", "claude-sonnet-4-6"),
 };
 
 function mode(): AiProviderMode {

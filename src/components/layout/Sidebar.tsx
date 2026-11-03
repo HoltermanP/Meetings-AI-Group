@@ -16,6 +16,7 @@ import {
   Users,
   CheckSquare,
   SlidersHorizontal,
+  AudioLines,
 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -70,6 +71,7 @@ export default function Sidebar({ onNavigate }: SidebarProps) {
     { href: "/acties", label: "Acties", icon: CheckSquare },
     { href: "/record", label: "Opname starten", icon: Mic },
     { href: "/medewerkers", label: "Medewerkers", icon: Users },
+    { href: "/stemprofielen", label: "Stemprofielen", icon: AudioLines },
   ];
 
   return (

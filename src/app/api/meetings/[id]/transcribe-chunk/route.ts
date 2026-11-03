@@ -1,34 +1,49 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { transcribeAudio, generateTitle } from "@/lib/openai";
-import { isProvisionalMeetingTitle } from "@/lib/meeting-recording";
+import { renameSpeakerInMeeting, transcribeChunkWithSpeakers } from "@/lib/speakers";
+import { nextChunkPosition, rebuildTranscriptFromChunks } from "@/lib/transcript-chunks";
 
 /**
- * Per-chunk Whisper-transcriptie. Elke chunk is een complete WebM van ~7-8 minuten
- * (≈ 1,5-2 MB op 32 kbps), dus past binnen de Vercel body-limit (4,5 MB) én binnen
- * Whisper's 25 MB limit. Geen Vercel Blob, geen ffmpeg, geen function timeout-issues.
+ * Per-segment Whisper-transcriptie, al tíjdens de opname. Elk segment is een complete
+ * WebM van ~5 minuten (≈ 1,2 MB op 32 kbps): past binnen Vercel's 4,5 MB body-limit
+ * én Whisper's 25 MB. Elk segment wordt los opgeslagen (TranscriptChunk), zodat een
+ * mislukte of dubbele upload het bestaande transcript nooit beschadigt.
  */
-export const maxDuration = 60;
+export const maxDuration = 300;
 
-type Segment = { start: number; end: number; text: string };
+type Segment = { start: number; end: number; text: string; speaker?: string };
+
+async function authorize(params: Promise<{ id: string }>) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return { error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
+  }
+  const { id } = await params;
+  const meeting = await prisma.meeting.findFirst({ where: { id } });
+  if (!meeting) {
+    return { error: NextResponse.json({ error: "Not found" }, { status: 404 }) };
+  }
+  return { id };
+}
+
+/** GET — waar een (voortgezette) opname verder moet: volgende index en tijdsoffset. */
+export async function GET(
+  _req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const a = await authorize(params);
+  if ("error" in a) return a.error;
+  return NextResponse.json(await nextChunkPosition(a.id));
+}
 
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { id } = await params;
-  const meeting = await prisma.meeting.findFirst({
-    where: { id },
-  });
-  if (!meeting) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
+  const a = await authorize(params);
+  if ("error" in a) return a.error;
+  const { id } = a;
 
   let formData: FormData;
   try {
@@ -39,142 +54,82 @@ export async function POST(
 
   const audioBlob = formData.get("audio") as Blob | null;
   const indexStr = formData.get("index") as string | null;
-  const totalStr = formData.get("total") as string | null;
   const offsetStr = formData.get("offsetSeconds") as string | null;
-  const totalDurationStr = formData.get("totalDuration") as string | null;
+  const durationStr = formData.get("durationSeconds") as string | null;
   const mimeType = (formData.get("mimeType") as string) || "audio/webm";
 
-  if (!audioBlob || !indexStr || !totalStr) {
+  if (!audioBlob || !indexStr) {
     return NextResponse.json(
-      { error: "Velden 'audio', 'index' en 'total' zijn verplicht" },
+      { error: "Velden 'audio' en 'index' zijn verplicht" },
       { status: 400 }
     );
   }
 
   const index = Number.parseInt(indexStr, 10);
-  const total = Number.parseInt(totalStr, 10);
   const offsetSeconds = offsetStr ? Number.parseFloat(offsetStr) : 0;
-  const isLast = index === total - 1;
-
-  if (Number.isNaN(index) || Number.isNaN(total) || index < 0 || total <= 0) {
-    return NextResponse.json({ error: "Ongeldige index/total" }, { status: 400 });
+  const durationSeconds = durationStr ? Number.parseFloat(durationStr) : null;
+  if (Number.isNaN(index) || index < 0) {
+    return NextResponse.json({ error: "Ongeldige index" }, { status: 400 });
   }
 
   const t0 = Date.now();
-  console.log(`[chunk ${id}#${index + 1}/${total}] start, offset=${offsetSeconds}s`);
-
   try {
     const buffer = Buffer.from(await audioBlob.arrayBuffer());
     console.log(
-      `[chunk ${id}#${index + 1}/${total}] ${Math.round(buffer.length / 1024)} KB ontvangen`
+      `[chunk ${id}#${index}] ${Math.round(buffer.length / 1024)} KB ontvangen, offset=${offsetSeconds}s`
     );
 
-    if (index === 0) {
-      await prisma.meeting.update({
-        where: { id },
-        data: { status: "processing" },
-      });
-      await prisma.transcript.upsert({
-        where: { meetingId: id },
-        update: { content: "", segments: JSON.stringify([]), isProvisional: true },
-        create: {
-          meetingId: id,
-          content: "",
-          segments: JSON.stringify([]),
-          isProvisional: true,
-        },
-      });
-    }
-
-    const wStart = Date.now();
-    const { text, segments } = await transcribeAudio(buffer, mimeType);
-    console.log(
-      `[chunk ${id}#${index + 1}/${total}] Whisper klaar in ${Date.now() - wStart}ms — ${text.length} chars`
+    const { text, segments, sampleRequests, renames } = await transcribeChunkWithSpeakers(
+      id,
+      index,
+      buffer,
+      mimeType
     );
+    console.log(`[chunk ${id}#${index}] transcriptie klaar in ${Date.now() - t0}ms — ${text.length} chars`);
 
     const adjustedSegments: Segment[] = segments.map((s) => ({
+      ...s,
       start: s.start + offsetSeconds,
       end: s.end + offsetSeconds,
-      text: s.text,
     }));
 
+    const data = {
+      offsetSeconds,
+      durationSeconds: durationSeconds != null && !Number.isNaN(durationSeconds) ? durationSeconds : null,
+      content: text.trim(),
+      segments: JSON.stringify(adjustedSegments),
+    };
+    await prisma.transcriptChunk.upsert({
+      where: { meetingId_index: { meetingId: id, index } },
+      update: data,
+      create: { meetingId: id, index, ...data },
+    });
+
+    // "Spreker 1" uit een eerder segment heeft nu een naam: overal doorvoeren.
+    for (const r of renames) await renameSpeakerInMeeting(id, r.from, r.to);
+
+    // Een al afgeronde meeting (bv. herstel van een achtergebleven segment) blijft definitief.
     const current = await prisma.transcript.findUnique({
       where: { meetingId: id },
+      select: { isProvisional: true },
     });
-
-    let existingSegments: Segment[] = [];
-    if (current?.segments) {
-      try {
-        const parsed = JSON.parse(current.segments);
-        if (Array.isArray(parsed)) existingSegments = parsed as Segment[];
-      } catch {
-        /* corrupt JSON — start opnieuw */
-      }
-    }
-    const existingContent = current?.content || "";
-    const cleanText = text.trim();
-
-    const newContent = existingContent && cleanText
-      ? `${existingContent} ${cleanText}`
-      : (cleanText || existingContent);
-    const newSegments = [...existingSegments, ...adjustedSegments];
-
-    await prisma.transcript.update({
-      where: { meetingId: id },
-      data: {
-        content: newContent,
-        segments: JSON.stringify(newSegments),
-        isProvisional: !isLast,
-      },
-    });
-
-    if (isLast) {
-      const totalDuration = totalDurationStr ? Number.parseInt(totalDurationStr, 10) : null;
-      const updateData: { status: string; endedAt: Date; title?: string; duration?: number } = {
-        status: "completed",
-        endedAt: new Date(),
-      };
-      if (totalDuration && !Number.isNaN(totalDuration)) {
-        updateData.duration = totalDuration;
-      }
-
-      const m = await prisma.meeting.findUnique({ where: { id } });
-      if (m && newContent && isProvisionalMeetingTitle(m.title)) {
-        try {
-          updateData.title = await generateTitle(newContent);
-        } catch (err) {
-          console.error(`[chunk ${id}] generateTitle faalde:`, err);
-        }
-      }
-      await prisma.meeting.update({ where: { id }, data: updateData });
-      console.log(`[chunk ${id}] FINAL na ${Date.now() - t0}ms — totaal ${newContent.length} chars`);
-    } else {
-      console.log(`[chunk ${id}#${index + 1}/${total}] OK na ${Date.now() - t0}ms`);
-    }
+    const { content, chunkCount } = await rebuildTranscriptFromChunks(
+      id,
+      current ? current.isProvisional : true
+    );
 
     return NextResponse.json({
       ok: true,
       index,
-      total,
-      isLast,
-      transcriptLength: newContent.length,
+      chunkCount,
+      transcriptLength: content.length,
+      // De browser knipt deze stukken uit het segment voor nieuwe stemprofielen.
+      sampleRequests,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[chunk ${id}#${index + 1}/${total}] FAIL na ${Date.now() - t0}ms:`, msg);
-
-    await prisma.transcript.updateMany({
-      where: { meetingId: id },
-      data: {
-        content: `⚠️ Transcriptie mislukt op chunk ${index + 1}/${total}: ${msg}`,
-        isProvisional: false,
-      },
-    });
-    await prisma.meeting.updateMany({
-      where: { id },
-      data: { status: "completed" },
-    });
-
+    console.error(`[chunk ${id}#${index}] FAIL na ${Date.now() - t0}ms:`, msg);
+    // Transcript bewust niet aanraken: de client probeert dit segment opnieuw.
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

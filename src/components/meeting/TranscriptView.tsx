@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Search, ChevronDown, ChevronUp } from "lucide-react";
+import { Search, ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatDuration } from "@/lib/utils";
@@ -12,11 +12,42 @@ type Props = {
   segments?: TranscriptSegment[];
   /** Whisper is nog bezig — transcript wordt straks bijgewerkt. */
   isProvisional?: boolean;
+  /** Spreker hernoemen in het hele transcript (ook het stemprofiel). */
+  onRenameSpeaker?: (from: string, to: string) => Promise<void>;
 };
 
-export default function TranscriptView({ content, segments = [], isProvisional }: Props) {
+const SPEAKER_COLORS = [
+  "bg-indigo-100 text-indigo-800",
+  "bg-emerald-100 text-emerald-800",
+  "bg-amber-100 text-amber-800",
+  "bg-sky-100 text-sky-800",
+  "bg-rose-100 text-rose-800",
+  "bg-violet-100 text-violet-800",
+];
+
+export default function TranscriptView({ content, segments = [], isProvisional, onRenameSpeaker }: Props) {
   const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState(false);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [newName, setNewName] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const speakers = [...new Set(segments.map((s) => s.speaker).filter(Boolean) as string[])];
+  const speakerColor = (speaker: string) => SPEAKER_COLORS[speakers.indexOf(speaker) % SPEAKER_COLORS.length];
+
+  const submitRename = async () => {
+    if (!renaming || !onRenameSpeaker || !newName.trim() || newName.trim() === renaming) {
+      setRenaming(null);
+      return;
+    }
+    setSaving(true);
+    try {
+      await onRenameSpeaker(renaming, newName.trim());
+      setRenaming(null);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const safeContent =
     typeof content === "string"
@@ -101,6 +132,42 @@ export default function TranscriptView({ content, segments = [], isProvisional }
         </p>
       )}
 
+      {!collapsed && !isFailed && speakers.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-gray-500">Sprekers:</span>
+          {speakers.map((sp) =>
+            renaming === sp ? (
+              <span key={sp} className="flex items-center gap-1">
+                <Input
+                  autoFocus
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void submitRename();
+                    if (e.key === "Escape") setRenaming(null);
+                  }}
+                  onBlur={() => !saving && setRenaming(null)}
+                  placeholder="Naam"
+                  className="h-7 w-40 text-xs"
+                />
+                {saving && <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400" />}
+              </span>
+            ) : (
+              <button
+                key={sp}
+                type="button"
+                disabled={!onRenameSpeaker}
+                title={onRenameSpeaker ? "Klik om de naam aan te passen" : undefined}
+                onClick={() => { setRenaming(sp); setNewName(/^Spreker \d+$/.test(sp) ? "" : sp); }}
+                className={`rounded-full px-2 py-0.5 text-xs font-medium ${speakerColor(sp)} ${onRenameSpeaker ? "hover:ring-2 hover:ring-gray-300" : ""}`}
+              >
+                {sp}
+              </button>
+            ),
+          )}
+        </div>
+      )}
+
       {!collapsed && !isFailed && (
         <ScrollArea className="h-96 rounded-xl border border-gray-200 bg-gray-50">
           <div className="p-4 space-y-3">
@@ -111,6 +178,11 @@ export default function TranscriptView({ content, segments = [], isProvisional }
                     {formatDuration(Math.floor(seg.start))}
                   </span>
                   <p className="text-sm text-gray-700 leading-relaxed">
+                    {seg.speaker && (
+                      <span className={`mr-2 rounded px-1.5 py-0.5 text-[11px] font-semibold ${speakerColor(seg.speaker)}`}>
+                        {seg.speaker}
+                      </span>
+                    )}
                     {highlight(seg.text)}
                   </p>
                 </div>
